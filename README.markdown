@@ -5,3 +5,5 @@
 
 Ruby [CloudI API](http://cloudi.org/api.html#1_Intro)
 
+Available as a [Ruby gem at `https://rubygems.org/gems/cloudi`](https://rubygems.org/gems/cloudi).
+
