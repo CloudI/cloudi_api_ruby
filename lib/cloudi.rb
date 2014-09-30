@@ -73,11 +73,22 @@ module CloudI
                 raise InvalidInputException
             end
             @initialization_complete = false
+            @terminate = false
             @size = buffer_size_str.to_i
             @callbacks = Hash.new
+            @timeout_terminate = 1000 # TIMEOUT_TERMINATE_MIN
             send(Erlang.term_to_binary(:init))
             poll_request(false)
         end
+        attr_reader :process_index
+        attr_reader :process_count
+        attr_reader :process_count_max
+        attr_reader :process_count_min
+        attr_reader :prefix
+        attr_reader :timeout_initialize
+        attr_reader :timeout_async
+        attr_reader :timeout_sync
+        attr_reader :timeout_terminate
 
         def self.thread_count
             s = getenv('CLOUDI_API_INIT_THREAD_COUNT')
@@ -114,13 +125,13 @@ module CloudI
         def send_async(name, request,
                        timeout=nil, request_info=nil, priority=nil)
             if timeout.nil?
-                timeout = @timeoutAsync
+                timeout = @timeout_async
             end
             if request_info.nil?
                 request_info = ''
             end
             if priority.nil?
-                priority = @priorityDefault
+                priority = @priority_default
             end
             send(Erlang.term_to_binary([:send_async, name,
                                         OtpErlangBinary.new(request_info),
@@ -132,13 +143,13 @@ module CloudI
         def send_sync(name, request,
                       timeout=nil, request_info=nil, priority=nil)
             if timeout.nil?
-                timeout = @timeoutSync
+                timeout = @timeout_sync
             end
             if request_info.nil?
                 request_info = ''
             end
             if priority.nil?
-                priority = @priorityDefault
+                priority = @priority_default
             end
             send(Erlang.term_to_binary([:send_sync, name,
                                         OtpErlangBinary.new(request_info),
@@ -150,13 +161,13 @@ module CloudI
         def mcast_async(name, request,
                         timeout=nil, request_info=nil, priority=nil)
             if timeout.nil?
-                timeout = @timeoutAsync
+                timeout = @timeout_async
             end
             if request_info.nil?
                 request_info = ''
             end
             if priority.nil?
-                priority = @priorityDefault
+                priority = @priority_default
             end
             send(Erlang.term_to_binary([:mcast_async, name,
                                         OtpErlangBinary.new(request_info),
@@ -179,7 +190,7 @@ module CloudI
 
         def forward_async(name, request_info, request,
                           timeout, priority, trans_id, pid)
-            if @requestTimeoutAdjustment
+            if @request_timeout_adjustment
                 if timeout == @request_timeout
                     elapsed = [0,
                                ((Time.now - @request_timer) * 1000.0).floor].max
@@ -200,7 +211,7 @@ module CloudI
 
         def forward_sync(name, request_info, request,
                          timeout, priority, trans_id, pid)
-            if @requestTimeoutAdjustment
+            if @request_timeout_adjustment
                 if timeout == @request_timeout
                     elapsed = [0,
                                ((Time.now - @request_timer) * 1000.0).floor].max
@@ -233,7 +244,7 @@ module CloudI
 
         def return_async(name, pattern, response_info, response,
                          timeout, trans_id, pid)
-            if @requestTimeoutAdjustment
+            if @request_timeout_adjustment
                 if timeout == @request_timeout
                     elapsed = [0,
                                ((Time.now - @request_timer) * 1000.0).floor].max
@@ -256,7 +267,7 @@ module CloudI
 
         def return_sync(name, pattern, response_info, response,
                         timeout, trans_id, pid)
-            if @requestTimeoutAdjustment
+            if @request_timeout_adjustment
                 if timeout == @request_timeout
                     elapsed = [0,
                                ((Time.now - @request_timer) * 1000.0).floor].max
@@ -279,7 +290,7 @@ module CloudI
 
         def recv_async(timeout=nil, trans_id=nil, consume=true)
             if timeout.nil?
-                timeout = @timeoutSync
+                timeout = @timeout_sync
             end
             if trans_id.nil?
                 trans_id = 0.chr * 16
@@ -290,38 +301,10 @@ module CloudI
             return poll_request(false)
         end
 
-        def process_index
-            return @processIndex
-        end
-
-        def process_count
-            return @processCount
-        end
-
-        def process_count_max
-            return @processCountMax
-        end
-
-        def process_count_min
-            return @processCountMin
-        end
-
-        def prefix
-            return @prefix
-        end
-
-        def timeout_async
-            return @timeoutAsync
-        end
-
-        def timeout_sync
-            return @timeoutSync
-        end
-
         def callback(command, name, pattern, request_info, request,
                      timeout, priority, trans_id, pid)
             request_time_start = nil
-            if @requestTimeoutAdjustment
+            if @request_timeout_adjustment
                 @request_timer = Time.now
                 @request_timeout = timeout
             end
@@ -421,8 +404,47 @@ module CloudI
             end
         end
 
+        def handle_events(external, data, data_size, i, command=nil)
+            if command.nil?
+                if i > data_size
+                    raise MessageDecodingException
+                end
+                j = 4
+                command = data[i, j].unpack('L')[0]
+            else
+                j = 4
+            end
+            loop do
+                case command
+                when MESSAGE_TERM
+                    @terminate = true
+                    if external
+                        return false
+                    else
+                        raise TerminateException.new(@timeout_terminate)
+                    end
+                when MESSAGE_REINIT
+                    i += j; j = 4
+                    @process_count = data[i, j].unpack('L')[0]
+                    i += j
+                when MESSAGE_KEEPALIVE
+                    send(Erlang.term_to_binary(:keepalive))
+                    i += j
+                end
+                if i > data_size
+                    raise MessageDecodingException
+                elsif i == data_size
+                    return true
+                end
+                j = 4
+                command = data[i, j].unpack('L')[0]
+            end
+        end
+
         def poll_request(external)
-            if external and not @initialization_complete
+            if @terminate
+                return nil
+            elsif external and not @initialization_complete
                 send(Erlang.term_to_binary(:polling))
                 @initialization_complete = true
             end
@@ -439,61 +461,68 @@ module CloudI
             end
 
             data = recv('')
-            if data.bytesize == 0
+            data_size = data.bytesize
+            if data_size == 0
                 return nil
             end
+            i = 0; j = 4
 
             loop do
-                i = 0; j = 4
                 command = data[i, j].unpack('L')[0]
                 case command
                 when MESSAGE_INIT
                     i += j; j = 4 + 4 + 4 + 4 + 4
                     tmp = data[i, j].unpack('LLLLL')
-                    @processIndex = tmp[0]
-                    @processCount = tmp[1]
-                    @processCountMax = tmp[2]
-                    @processCountMin = tmp[3]
-                    prefixSize = tmp[4]
-                    i += j; j = prefixSize + 4 + 4 + 1 + 1
-                    tmp = data[i, j].unpack("Z#{prefixSize}LLcC")
+                    @process_index = tmp[0]
+                    @process_count = tmp[1]
+                    @process_count_max = tmp[2]
+                    @process_count_min = tmp[3]
+                    prefix_size = tmp[4]
+                    i += j; j = prefix_size + 4 + 4 + 4 + 4 + 1 + 1
+                    tmp = data[i, j].unpack("Z#{prefix_size}LLLLcC")
                     @prefix = tmp[0]
-                    @timeoutAsync = tmp[1]
-                    @timeoutSync = tmp[2]
-                    @priorityDefault = tmp[3]
-                    @requestTimeoutAdjustment = (tmp[4] != 0)
+                    @timeout_initialize = tmp[1]
+                    @timeout_async = tmp[2]
+                    @timeout_sync = tmp[3]
+                    @timeout_terminate = tmp[4]
+                    @priority_default = tmp[5]
+                    @request_timeout_adjustment = (tmp[6] != 0)
                     i += j
-                    if i != data.length
-                        raise MessageDecodingException
+                    if i != data_size
+                        API.assert{external == false}
+                        handle_events(external, data, data_size, i)
                     end
                     return
                 when MESSAGE_SEND_ASYNC, MESSAGE_SEND_SYNC
                     i += j; j = 4
-                    nameSize = data[i, j].unpack('L')[0]
-                    i += j; j = nameSize + 4
-                    tmp = data[i, j].unpack("Z#{nameSize}L")
+                    name_size = data[i, j].unpack('L')[0]
+                    i += j; j = name_size + 4
+                    tmp = data[i, j].unpack("Z#{name_size}L")
                     name = tmp[0]
-                    patternSize = tmp[1]
-                    i += j; j = patternSize + 4
-                    tmp = data[i, j].unpack("Z#{patternSize}L")
+                    pattern_size = tmp[1]
+                    i += j; j = pattern_size + 4
+                    tmp = data[i, j].unpack("Z#{pattern_size}L")
                     pattern = tmp[0]
-                    requestInfoSize = tmp[1]
-                    i += j; j = requestInfoSize + 1 + 4
-                    tmp = data[i, j].unpack("a#{requestInfoSize}xL")
+                    request_info_size = tmp[1]
+                    i += j; j = request_info_size + 1 + 4
+                    tmp = data[i, j].unpack("a#{request_info_size}xL")
                     request_info = tmp[0]
-                    requestSize = tmp[1]
-                    i += j; j = requestSize + 1 + 4 + 1 + 16 + 4
-                    tmp = data[i, j].unpack("a#{requestSize}xLca16L")
+                    request_size = tmp[1]
+                    i += j; j = request_size + 1 + 4 + 1 + 16 + 4
+                    tmp = data[i, j].unpack("a#{request_size}xLca16L")
                     request = tmp[0]
                     timeout = tmp[1]
                     priority = tmp[2]
                     trans_id = tmp[3]
-                    pidSize = tmp[4]
-                    i += j; j = pidSize
-                    pid = data[i, j].unpack("a#{pidSize}")[0]
+                    pid_size = tmp[4]
+                    i += j; j = pid_size
+                    pid = data[i, j].unpack("a#{pid_size}")[0]
                     i += j
-                    if i != data.length
-                        raise MessageDecodingException
+                    if i != data_size
+                        API.assert{external == true}
+                        if not handle_events(external, data, data_size, i)
+                            return nil
+                        end
                     end
                     data.clear()
                     callback(command, name, pattern, request_info, request,
@@ -501,71 +530,76 @@ module CloudI
                              Erlang.binary_to_term(pid))
                 when MESSAGE_RECV_ASYNC, MESSAGE_RETURN_SYNC
                     i += j; j = 4
-                    responseInfoSize = data[i, j].unpack('L')[0]
-                    i += j; j = responseInfoSize + 1 + 4
-                    tmp = data[i, j].unpack("a#{responseInfoSize}xL")
+                    response_info_size = data[i, j].unpack('L')[0]
+                    i += j; j = response_info_size + 1 + 4
+                    tmp = data[i, j].unpack("a#{response_info_size}xL")
                     response_info = tmp[0]
-                    responseSize = tmp[1]
-                    i += j; j = responseSize + 1 + 16
-                    tmp = data[i, j].unpack("a#{responseSize}xa16")
+                    response_size = tmp[1]
+                    i += j; j = response_size + 1 + 16
+                    tmp = data[i, j].unpack("a#{response_size}xa16")
                     response = tmp[0]
                     trans_id = tmp[1]
                     i += j
-                    if i != data.length
-                        raise MessageDecodingException
+                    if i != data_size
+                        API.assert{external == false}
+                        handle_events(external, data, data_size, i)
                     end
                     return [response_info, response, trans_id]
                 when MESSAGE_RETURN_ASYNC
                     i += j; j = 16
                     trans_id = data[i, j].unpack('a16')[0]
                     i += j
-                    if i != data.length
-                        raise MessageDecodingException
+                    if i != data_size
+                        API.assert{external == false}
+                        handle_events(external, data, data_size, i)
                     end
                     return trans_id
                 when MESSAGE_RETURNS_ASYNC
                     i += j; j = 4
-                    transIdCount = data[i, j].unpack('L')[0]
-                    i += j; j = 16 * transIdCount
-                    transIdList = data[i, j].unpack('a16' * transIdCount)
+                    trans_id_count = data[i, j].unpack('L')[0]
+                    i += j; j = 16 * trans_id_count
+                    trans_ids = data[i, j].unpack('a16' * trans_id_count)
                     i += j
-                    if i != data.length
-                        raise MessageDecodingException
+                    if i != data_size
+                        API.assert{external == false}
+                        handle_events(external, data, data_size, i)
                     end
-                    return transIdList
-                when MESSAGE_KEEPALIVE
-                    send(Erlang.term_to_binary(:keepalive))
-                    i += j
-                    if i < data.length
-                        raise MessageDecodingException
-                    end
-                    data.slice!(0, i)
-                    if data.length > 0
-                        if IO.select([@s], nil, nil, 0).nil?
-                            next
-                        end
-                    end
-                when MESSAGE_REINIT
-                    i += j; j = 4
-                    @processCount = data[i, j].unpack('L')[0]
-                    i += j
-                    if i < data.length
-                        raise MessageDecodingException
-                    end
-                    data.slice!(0, i)
-                    if data.length > 0
-                        if IO.select([@s], nil, nil, 0).nil?
-                            next
-                        end
-                    end
+                    return trans_ids
                 when MESSAGE_SUBSCRIBE_COUNT
                     i += j; j = 4
-                    subscribe_count = data[i, j].unpack('L')[0]
+                    count = data[i, j].unpack('L')[0]
                     i += j
-                    if i != data.length
+                    if i != data_size
+                        API.assert{external == false}
+                        handle_events(external, data, data_size, i)
+                    end
+                    return count
+                when MESSAGE_TERM
+                    if not handle_events(external, data, data_size, i, command)
+                        return nil
+                    end
+                    API.assert{false}
+                when MESSAGE_REINIT
+                    i += j; j = 4
+                    @process_count = data[i, j].unpack('L')[0]
+                    i += j; j = 4
+                    if i == data_size
+                        #
+                    elsif i < data_size
+                        next
+                    else
                         raise MessageDecodingException
                     end
-                    return subscribe_count
+                when MESSAGE_KEEPALIVE
+                    send(Erlang.term_to_binary(:keepalive))
+                    i += j; j = 4
+                    if i == data_size
+                        #
+                    elsif i < data_size
+                        next
+                    else
+                        raise MessageDecodingException
+                    end
                 else
                     raise MessageDecodingException
                 end
@@ -582,9 +616,11 @@ module CloudI
                 end
     
                 data = recv(data)
-                if data.bytesize == 0
+                data_size = data.bytesize
+                if data_size == 0
                     return nil
                 end
+                i = 0; j = 4
             end
         end
 
@@ -621,6 +657,7 @@ module CloudI
         end
 
         private :callback
+        private :handle_events
         private :poll_request
         private :binary_key_value_parse
         private
@@ -669,6 +706,7 @@ module CloudI
         MESSAGE_KEEPALIVE           = 8
         MESSAGE_REINIT              = 9
         MESSAGE_SUBSCRIBE_COUNT     = 10
+        MESSAGE_TERM                = 11
 
         NULL = 0
 
@@ -693,6 +731,13 @@ module CloudI
     end
 
     class MessageDecodingException < Exception
+    end
+
+    class TerminateException < Exception
+        def initialize(timeout)
+            @timeout = timeout
+        end
+        attr_reader :timeout
     end
 end
 
