@@ -6,7 +6,7 @@ Gem::Specification.new do |s|
     s.date        = '2017-03-28'
     s.summary     = 'CloudI API'
     s.description = 'Ruby CloudI API'
-    s.license     = 'BSD'
+    s.license     = 'MIT'
     s.authors     = ['Michael Truog']
     s.email       = 'mjtruog@gmail.com'
     s.homepage    = 'http://cloudi.org'
