@@ -8,7 +8,7 @@ Gem::Specification.new do |s|
     s.description = 'Ruby CloudI API'
     s.license     = 'MIT'
     s.authors     = ['Michael Truog']
-    s.email       = 'mjtruog@protonmail.com'
+    s.email       = 'mjtruog at protonmail dot com'
     s.homepage    = 'http://cloudi.org'
     s.cert_chain  = ['certs/okeuday.pem']
     s.signing_key = File.expand_path('~/.ssh/gem-private_key.pem') if $0 =~ /gem\z/
