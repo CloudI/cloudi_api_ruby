@@ -11,7 +11,7 @@ Available as a [Ruby gem at `https://rubygems.org/gems/cloudi`](https://rubygems
 Author
 ------
 
-Michael Truog (mjtruog [at] gmail (dot) com)
+Michael Truog (mjtruog at protonmail dot com)
 
 License
 -------
