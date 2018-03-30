@@ -9,7 +9,7 @@ Gem::Specification.new do |s|
     s.license     = 'MIT'
     s.authors     = ['Michael Truog']
     s.email       = 'mjtruog at protonmail dot com'
-    s.homepage    = 'http://cloudi.org'
+    s.homepage    = 'https://cloudi.org'
     s.cert_chain  = ['certs/okeuday.pem']
     s.signing_key = File.expand_path('~/.ssh/gem-private_key.pem') if $0 =~ /gem\z/
     s.extra_rdoc_files = ['README.markdown']
