@@ -2,8 +2,8 @@
 # ex: set ft=ruby fenc=utf-8 sts=4 ts=4 sw=4 et:
 Gem::Specification.new do |s|
     s.name        = 'cloudi'
-    s.version     = '2.0.2'
-    s.date        = '2021-05-27'
+    s.version     = '2.0.4'
+    s.date        = '2021-12-04'
     s.summary     = 'CloudI API'
     s.description = 'Ruby CloudI API'
     s.license     = 'MIT'
@@ -14,6 +14,6 @@ Gem::Specification.new do |s|
     s.signing_key = File.expand_path('~/.ssh/gem-private_key.pem') if $0 =~ /gem\z/
     s.extra_rdoc_files = ['README.markdown']
     s.files       = ['lib/cloudi.rb']
-    s.add_runtime_dependency 'erlang_rb', '~> 2.0', '>= 2.0.2'
-    s.add_development_dependency 'erlang_rb', '~> 2.0', '>= 2.0.2'
+    s.add_runtime_dependency 'erlang_rb', '~> 2.0', '>= 2.0.4'
+    s.add_development_dependency 'erlang_rb', '~> 2.0', '>= 2.0.4'
 end
